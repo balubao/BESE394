@@ -1,0 +1,742 @@
+---
+title: "DAY2 GSE198256"
+author: "David Gomez-Cabrero"
+date: "2024-January"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Experimental design
+
+Lets review experimental design from a practical perspective
+
+```{r read data}
+
+# Read data
+urld <- "https://www.ncbi.nlm.nih.gov/geo/download/?format=file&type=rnaseq_counts"
+path <- paste(urld, "acc=GSE198256", "file=GSE198256_raw_counts_GRCh38.p13_NCBI.tsv.gz", sep="&");
+GSE198256_count <- as.matrix(data.table::fread(path, header=T, colClasses="integer"), rownames=1)
+
+# Read Meta data
+library(GEOquery)
+gds <- getGEO("GSE198256")
+Meta_GSE198256 <- pData(gds$GSE198256_series_matrix.txt.gz@phenoData)
+Group <- Meta_GSE198256[,c("disease state:ch1")]
+
+dim(GSE198256_count)
+Group
+
+```
+
+## Limma: Normalize and set design
+
+```{r Normalize and set design}
+
+# set DGE class
+require(limma)
+require(edgeR)
+dge <- DGEList(counts=GSE198256_count)
+
+# Make sure on the metadata
+rownames(Meta_GSE198256)==colnames(GSE198256_count)
+Group[Group=="Covid19: Acute infection"] <- "Covid19AI"
+Group[Group=="Covid19: Recovery 3Mo"] <- "Covid193Mo"
+Group[Group=="Covid19: Recovery 6Mo"] <- "Covid196Mo"
+design <- model.matrix(~ Group )
+
+# Filter
+keep <- filterByExpr(dge, design=design)
+dge <- dge[keep,,keep.lib.sizes=FALSE]
+
+# Normalization
+dge <- calcNormFactors(dge)
+
+
+```
+
+## Limma: Voom or Trend?
+
+```{r Voom or Trend}
+
+## Trend
+
+# If the sequencing depth is reasonably consistent across the RNA samples, then the simplest and most robust approach to differential exis to use limma-trend. This approach will usually work well if the ratio of the largest library size to the smallest is not more than about 3-fold.
+logCPM <- cpm(dge, log=TRUE, prior.count=3)
+ # The prior count is used here to damp down the variances of logarithms of low counts.
+fit <- lmFit(logCPM, design)
+
+fit <- eBayes(fit, trend=TRUE)
+ # logical, should an intensity-dependent trend be allowed for the prior variance? If FALSE then the prior variance is constant. Alternatively, trend can be a row-wise numeric vector, which will be used as the covariate for the prior variance.
+ # The use of eBayes or treat with trend=TRUE is known as the limma-trend method (Law et al, 2014; Phipson et al, 2016). With this option, an intensity-dependent trend is fitted to the prior variances s2.prior
+
+res_t = topTable(fit, coef=ncol(design), number = nrow(dge))
+
+
+## Voom
+
+# When the library sizes are quite variable between samples, then the voom approach is theoretically more powerful than limma-trend.
+v <- voom(dge, design, plot=TRUE)
+# The voom method is similar in purpose to the limma-trend method, which uses eBayes or treat with trend=TRUE. The voom method incorporates the mean-variance trend into the precision weights, whereas limma-trend incorporates the trend into the empirical Bayes moderation. The voom method takes into account the sequencing depths (library sizes) of the individual columns of counts and applies the mean-variance trend on an individual observation basis. limma-trend, on the other hand, assumes that the library sizes are not wildly different and applies the mean-variance trend on a genewise basis. As noted by Law et al (2014), voom should be more powerful than limma-trend if the library sizes are very different but, otherwise, the two methods should give similar results.
+fit_v <- lmFit(v, design)
+fit_v <- eBayes(fit_v)
+res_v = topTable(fit_v, coef=ncol(design), number = nrow(dge))
+
+
+
+
+```
+
+```{r}
+require(NOISeq)
+
+load("GSE198256_step1.Rda")
+
+mycountsbio = dat(data_NOISEQ, factor = NULL, type = "countsbio")
+explo.plot(mycountsbio, toplot = 1, samples = NULL, plottype = "barplot")
+
+
+```
+
+## ACTIVITY 1:
+
+-   How would you compare the results between voom and trend?
+
+  We can either compare the LFC or the Pvalues to get a sense of how DE can be enhanced under one method vs the other. In our case, voom method seems to enhance LFC values compared to trend-method. Voom seems to also exagerate PValues compared to trend.
+  
+-   Is it required to run more than analysis?
+
+Depends on the question we want to ask. In this case, we are demonstrating the difference between both, so observing one case should be sufficient.
+
+-   What exactly are we asking with this differential expression?
+
+when we set a coeffecient, we ask for the differential expression for the contrast coeffecient. If the coeff is not defined, then we are asking if the feature is differentially expressed across the groups as a whole, similar to an ANOVA.
+
+```{r ACTIVITY 1}
+
+# Comparison 1: Are the LFCs generated different for the same genes?
+idx.t = order(rownames(res_t))
+idx.v = order(rownames(res_v))
+plot(res_v$logFC[idx.v], res_t$logFC[idx.t])
+abline(a=0, b=1, col = "red")
+
+plot(sort(res_v$logFC), sort(res_t$logFC))
+abline(a=0, b=1, col = "red")
+
+
+
+# Comparison 2: Are the Pvalues generated different for the same genes?
+idx.t = order(rownames(res_t))
+idx.v = order(rownames(res_v))
+plot(-log10(res_v$P.Value[idx.v]), -log10(res_t$P.Value[idx.t]))
+abline(a=0, b=1, col = "red")
+
+plot(sort(-log10(res_v$P.Value)), sort(-log10(res_t$P.Value)))
+abline(a=0, b=1, col = "red")
+
+
+# plot(rank(as.numeric(rownames(res_t))), rank(as.numeric(rownames(res_v))))
+# abline(a=0, b=1)
+# 
+# plot(rank(as.numeric(rownames(res_t))), rank(as.numeric(rownames(res_v))))
+# 
+# cor(as.numeric(rownames(res_t)),as.numeric(rownames(res_v)))
+# 
+# wilcox.test(as.numeric(rownames(res_t)), as.numeric(rownames(res_v)))
+# 
+# par(mfrow = c(2, 1))
+# plot(res_t$logFC, -log10(res_t$P.Value))
+# plot(res_v$logFC, -log10(res_v$P.Value))
+
+
+```
+
+## ACTIVITY 2:
+
+-   Plan the next analysis: questions, steps,...
+
+In the following test, we are interested in the change of monocyte expression over the process of recovery (healthy to acute to 3 month to 6 month to healthy).
+
+```{r ACTIVITY 2}
+
+# PACKAGES
+#BiocManager::install("clusterProfiler", update = FALSE)
+#BiocManager::install("ggupset", update = FALSE)
+#BiocManager::install("msigdbr", update = FALSE)
+#BiocManager::install("org.Hs.eg.db", update = FALSE)
+
+library(clusterProfiler)
+library(msigdbr)
+library(org.Hs.eg.db)
+library(magrittr)
+
+# Add more contrasts
+
+v <- voom(dge, design, plot=TRUE)
+colnames(design) <- c("Intercept", "Covid196Mo", "Covid19AI", "Healthy")
+fit <- lmFit(v, design)
+
+contrast.matrix <- makeContrasts(Covid19AI-Healthy, 
+                                 Intercept-Covid19AI,
+                                 Covid196Mo-Intercept,
+                                 Healthy-Covid196Mo,
+                                 levels=design)
+fit2 <- contrasts.fit(fit, contrast.matrix)
+fit2 <- eBayes(fit2)
+res_v_all = topTable(fit2, number = nrow(dge)) 
+res_v_hta = topTable(fit2,coef=1, number = nrow(dge)) 
+res_v_at3 = topTable(fit2,coef=2, number = nrow(dge)) 
+res_v_3t6 = topTable(fit2,coef=3, number = nrow(dge)) 
+res_v_6th = topTable(fit2,coef=4, number = nrow(dge)) 
+# topTable(fit2,coef=5) #try this!
+
+# Store all of them
+# save(res_v_all, res_v_hta, res_v_at3, res_v_3t6, res_v_6th, file = "results_DEG_Limma.Rda")
+load("results_DEG_Limma.Rda")
+```
+
+## ORA and Gene Set Enrichment analysis.
+
+-   What do we need to do the analysis?
+  GO references for our system of interest, in our case, that would be human.
+  
+-   What are the tools required?
+
+
+```{r Prepare ORA and GSEA}
+
+keytypes(org.Hs.eg.db)
+
+# If we want to shift annotations:
+ENSEMBL_vector <- mapIds(
+  # Replace with annotation package for the organism relevant to your data
+  org.Hs.eg.db,
+  # The vector of gene identifiers we want to map
+  keys = rownames(GSE198256_count),
+  # Replace with the type of gene identifiers in your data
+  keytype = "ENTREZID",
+  # Replace with the type of gene identifiers you would like to map to
+  column = "ENSEMBL",
+  # In the case of 1:many mappings, return the
+  # first one. This is default behavior!
+  multiVals = "first"
+)
+
+table(is.na(ENSEMBL_vector))
+table(duplicated(ENSEMBL_vector))
+length(ENSEMBL_vector)
+
+# We would like a data frame we can join to the differential expression stats
+gene_key_df <- data.frame(
+  ensembl_id = ENSEMBL_vector,
+  entrez_id = names(ENSEMBL_vector),
+  stringsAsFactors = FALSE
+) %>%
+  # If an Ensembl gene identifier doesn't map to a gene symbol, drop that
+  # from the data frame
+  dplyr::filter(!is.na(ensembl_id))
+
+
+```
+
+## Lets conduct ORA.
+
+-   What do we need to do the analysis?
+-   What are the tools required?
+
+```{r Run ORA}
+
+# Step 1: determine genes of interest.
+diff_table <- topTable(fit2,coef=1,p.value=0.01,number=10000) 
+genes_dif<- rownames(diff_table )
+
+# Step 2: determine background.
+
+background_set <- unique(rownames(logCPM))
+
+# Step 3: Determine gene sets.
+
+msigdbr_species()
+hs_msigdb_df <- msigdbr(species = "Homo sapiens")
+head(hs_msigdb_df)
+
+hs_kegg_df <- hs_msigdb_df %>%
+  dplyr::filter(
+    gs_cat == "C2", # This is to filter only to the C2 curated gene sets
+    gs_subcat == "CP:KEGG" # This is because we only want KEGG pathways
+  )
+
+# Step 4: conduct ORA.
+
+kegg_ora_results <- enricher(
+  gene = genes_dif, # A vector of your genes of interest
+  pvalueCutoff = 0.1, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  universe = background_set, # A vector containing your background set genes
+  # The pathway information should be a data frame with a term name or
+  # identifier and the gene identifiers
+  TERM2GENE = dplyr::select(
+    hs_kegg_df,
+    gs_name,
+    human_entrez_gene
+  )
+)
+
+
+# Step 5: Visualize / explore
+
+enrich_plot <- enrichplot::dotplot(kegg_ora_results)
+enrich_plot
+
+upset_plot <- enrichplot::upsetplot(kegg_ora_results)
+upset_plot
+
+# Step 6: EXERCISE: alternatives to KEGG?
+hs_BP_df <- hs_msigdb_df %>%
+  dplyr::filter(
+    gs_cat == "C5", # This is to filter only to the C2 curated gene sets
+    gs_subcat == "GO:BP" # This is because we only want KEGG pathways
+  )
+
+GOBP_ora_results <- enricher(
+  gene = genes_dif, # A vector of your genes of interest
+  pvalueCutoff = 0.1, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  universe = background_set, # A vector containing your background set genes
+  # The pathway information should be a data frame with a term name or
+  # identifier and the gene identifiers
+  TERM2GENE = dplyr::select(
+    hs_BP_df,
+    gs_name,
+    human_entrez_gene
+  )
+)
+
+enrich_plot <- enrichplot::dotplot(GOBP_ora_results)
+enrich_plot
+
+upset_plot <- enrichplot::upsetplot(GOBP_ora_results)
+upset_plot
+# note: see mor examples: https://alexslemonade.github.io/refinebio-examples/03-rnaseq/pathway-analysis_rnaseq_01_ora.html#46_Over-representation_Analysis_(ORA) 
+
+```
+```{r}
+res_v_hta = topTable(fit2,coef=1, p.value=0.01, number = nrow(dge)) 
+res_v_at3 = topTable(fit2,coef=2, p.value=0.01, number = nrow(dge)) 
+res_v_3t6 = topTable(fit2,coef=3, p.value=0.01, number = nrow(dge)) 
+res_v_6th = topTable(fit2,coef=4, p.value=0.01, number = nrow(dge)) 
+
+res_list = list(
+                res_v_hta,
+                res_v_at3,
+                res_v_3t6)
+```
+
+```{r}
+## Check KEGG pathways for all transitions
+
+GET_KEGG_ORA_RESULTS = function(diff_table){
+  
+  genes_dif<- rownames(diff_table)
+  
+  kegg_ora_results <- enricher(
+  gene = genes_dif, # A vector of your genes of interest
+  pvalueCutoff = 0.1, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  universe = background_set, # A vector containing your background set genes
+  # The pathway information should be a data frame with a term name or
+  # identifier and the gene identifiers
+  TERM2GENE = dplyr::select(
+    hs_kegg_df,
+    gs_name,
+    human_entrez_gene
+  )
+)
+  return(kegg_ora_results)
+}
+GET_GO_BP_ORA_RESULTS = function(diff_table){
+  
+  genes_dif<- rownames(diff_table)
+  
+  bp_ora_results <- enricher(
+  gene = genes_dif, # A vector of your genes of interest
+  pvalueCutoff = 0.1, # Can choose a FDR cutoff
+  pAdjustMethod = "BH", # Method to be used for multiple testing correction
+  universe = background_set, # A vector containing your background set genes
+  # The pathway information should be a data frame with a term name or
+  # identifier and the gene identifiers
+  TERM2GENE = dplyr::select(
+    hs_BP_df,
+    gs_name,
+    human_entrez_gene
+  )
+)
+  return(bp_ora_results)
+}
+
+# Step 5: Visualize / explore
+kegg_ora_results.ls = lapply(res_list, GET_KEGG_ORA_RESULTS)
+enrich_plot.ls = lapply(kegg_ora_results.ls, function(x) enrichplot::dotplot(x))
+enrich_plot.ls
+
+upset_plot.ls = lapply(kegg_ora_results.ls, function(x) enrichplot::upsetplot(x))
+upset_plot.ls
+
+# Step 5: Visualize / explore
+go_bp_ora_results.ls = lapply(res_list, GET_GO_BP_ORA_RESULTS)
+enrich_plot.ls = lapply(go_bp_ora_results.ls, function(x) enrichplot::dotplot(x))
+enrich_plot.ls
+
+upset_plot.ls = lapply(go_bp_ora_results.ls, function(x) enrichplot::upsetplot(x))
+upset_plot.ls
+
+# healthy to acute, acute to 3 months, 3 months to 6 months
+
+
+```
+
+## Lets conduct GSEA.
+
+```{r}
+res_v_hta = topTable(fit2,coef=1, p.value=1, number = nrow(dge)) 
+res_v_at3 = topTable(fit2,coef=2, p.value=1, number = nrow(dge)) 
+res_v_3t6 = topTable(fit2,coef=3, p.value=1, number = nrow(dge)) 
+res_v_6th = topTable(fit2,coef=4, p.value=1, number = nrow(dge)) 
+
+res_2_list = list(
+                res_v_hta,
+                res_v_at3,
+                res_v_3t6,
+                res_v_6th)
+```
+
+```{r run GSEA}
+
+
+# Step 1: determine genes of interest.
+diff_table_all <- topTable(fit2,coef=1,p.value=1,number=nrow(logCPM)) 
+
+# we want all the genes for our analysis
+
+# Step 2: determine background.
+
+# we don't have to, because all the genes are evaluated.
+
+# Step 3: Determine gene sets.
+
+msigdbr_species()
+hs_msigdb_df <- msigdbr(species = "Homo sapiens")
+head(hs_msigdb_df)
+
+hs_kegg_df <- hs_msigdb_df %>%
+  dplyr::filter(
+    gs_cat == "C2", # This is to filter only to the C2 curated gene sets
+    gs_subcat == "CP:KEGG" # This is because we only want KEGG pathways
+  )
+
+# Step 4: conduct GSEA
+# function(diff_table_all){
+  list_ordered <- diff_table_all[,"B"]
+  names(list_ordered) <- rownames(diff_table_all)
+  
+  
+  gsea_results <- GSEA(
+    geneList = list_ordered, # Ordered ranked gene list
+    minGSSize = 25, # Minimum gene set size
+    maxGSSize = 500, # Maximum gene set set
+    pvalueCutoff = 0.05, # p-value cutoff
+    eps = 0, # Boundary for calculating the p value
+    seed = TRUE, # Set seed to make results reproducible
+    pAdjustMethod = "BH", # Benjamini-Hochberg correction
+    TERM2GENE = dplyr::select(
+      hs_kegg_df,
+      gs_name,
+      human_entrez_gene
+    )
+  )
+  
+#   return(gsea_results)
+# }
+
+# Step 5: Visualize / explore
+
+
+head(gsea_results@result)
+
+gsea_result_df <- data.frame(gsea_results@result)
+gsea_result_df %>%
+  # This returns the 3 rows with the largest NES values
+  dplyr::slice_max(NES, n = 3)
+
+most_positive_nes_plot <- enrichplot::gseaplot(
+  gsea_results,
+  geneSetID = "KEGG_JAK_STAT_SIGNALING_PATHWAY",
+  title = "KEGG_JAK_STAT_SIGNALING_PATHWAY",
+  color.line = "#0d76ff"
+)
+most_positive_nes_plot
+
+gsea_result_df %>%
+  # Return the 3 rows with the smallest (most negative) NES values
+  dplyr::slice_min(NES, n = 3)
+
+most_negative_nes_plot <- enrichplot::gseaplot(
+  gsea_results,
+  geneSetID = "KEGG_SPLICEOSOME",
+  title = "KEGG_SPLICEOSOME",
+  color.line = "#0d76ff"
+)
+most_negative_nes_plot
+
+
+
+
+# Step 7: EXERCISE: compare GSEA vs ORA?
+
+
+```
+
+```{r}
+# Step 6: EXERCISE: alternatives to KEGG?
+
+  gsea_bp_results <- GSEA(
+    geneList = list_ordered, # Ordered ranked gene list
+    minGSSize = 25, # Minimum gene set size
+    maxGSSize = 500, # Maximum gene set set
+    pvalueCutoff = 0.05, # p-value cutoff
+    eps = 0, # Boundary for calculating the p value
+    seed = TRUE, # Set seed to make results reproducible
+    pAdjustMethod = "BH", # Benjamini-Hochberg correction
+    TERM2GENE = dplyr::select(
+      hs_BP_df,
+      gs_name,
+      human_entrez_gene
+    )
+  )
+
+# Step 5: Visualize / explore
+
+
+head(gsea_bp_results@result)
+
+gsea_result_df <- data.frame(gsea_bp_results@result)
+gsea_result_df %>%
+  # This returns the 3 rows with the largest NES values
+  dplyr::slice_max(NES, n = 3)
+
+most_positive_nes_plot <- enrichplot::gseaplot(
+  gsea_bp_results,
+  geneSetID = "GOBP_ANTIMICROBIAL_HUMORAL_RESPONSE",
+  title = "GOBP_ANTIMICROBIAL_HUMORAL_RESPONSE",
+  color.line = "#0d76ff"
+)
+most_positive_nes_plot
+
+gsea_result_df %>%
+  # Return the 3 rows with the smallest (most negative) NES values
+  dplyr::slice_min(NES, n = 3)
+
+most_negative_nes_plot <- enrichplot::gseaplot(
+  gsea_bp_results,
+  geneSetID = "GOBP_REGULATION_OF_MRNA_SPLICING_VIA_SPLICEOSOME",
+  title = "GOBP_REGULATION_OF_MRNA_SPLICING_VIA_SPLICEOSOME",
+  color.line = "#0d76ff"
+)
+most_negative_nes_plot
+```
+
+
+## Lets conduct GeneSetCluster.
+
+```{r prepare GSEA}
+# Healthy vs Group Covid19 
+# We prepare a function from the previous analysis
+load("results_DEG_Limma_2.Rda")
+
+# Healthy vs Covid19AI 
+# Diff_HvsAI <- topTable(fit2,coef=1,p.value=1,number=nrow(logCPM))
+# Diff_Hvs6Mo <- topTable(fit2,coef=2,p.value=1,number=nrow(logCPM))
+# # Healthy vs Covid196Mo 
+# Diff_Hvs6Mo <- topTable(fit2,coef=3,p.value=1,number=nrow(logCPM))
+
+Diff_HvAI = topTable(fit2,coef=1, p.value=1, number = nrow(dge)) 
+Diff_AIv3Mo = topTable(fit2,coef=2, p.value=1, number = nrow(dge)) 
+Diff_3Mov6Mo = topTable(fit2,coef=3, p.value=1, number = nrow(dge)) 
+Diff_6MovH = topTable(fit2,coef=4, p.value=1, number = nrow(dge)) 
+
+
+hs_msigdb_df <- msigdbr(species = "Homo sapiens")
+hs_kegg_df <- hs_msigdb_df %>%
+  dplyr::filter(
+    gs_cat == "C5", # This is to filter only to the C2 curated gene sets
+    gs_subcat == "GO:BP" # This is because we only want KEGG pathways
+  )
+
+
+doGSEA <- function(diff_table) {
+  list_ordered <- diff_table[,"B"]
+  names(list_ordered) <- rownames(diff_table)
+  
+  return(GSEA(
+    geneList = list_ordered, # Ordered ranked gene list
+    minGSSize = 25, # Minimum gene set size
+    maxGSSize = 500, # Maximum gene set set
+    pvalueCutoff = 0.05, # p-value cutoff
+    eps = 0, # Boundary for calculating the p value
+    seed = TRUE, # Set seed to make results reproducible
+    pAdjustMethod = "BH", # Benjamini-Hochberg correction
+    TERM2GENE = dplyr::select(
+      hs_kegg_df,
+      gs_name,
+      human_entrez_gene
+    )
+  ))
+}
+
+GSEA_HvAI <- doGSEA(Diff_HvAI)
+GSEA_AIv3Mo <- doGSEA(Diff_AIv3Mo)
+GSEA_3Mov6Mo <- doGSEA(Diff_3Mov6Mo)
+GSEA_6MovH <- doGSEA(Diff_6MovH)
+
+path <- "../gene_set_clusters/"
+
+write.csv(GSEA_HvAI, file = paste0(path, "/GSEA_HvsAI.csv"), row.names = FALSE)
+write.csv(GSEA_AIv3Mo, file = paste0(path, "/GSEA_AIvs3Mo.csv"), row.names = FALSE)
+write.csv(GSEA_3Mov6Mo, file = paste0(path, "/GSEA_3Movs6Mo.csv"), row.names = FALSE)
+write.csv(GSEA_6MovH, file = paste0(path, "/GSEA_6MovsH.csv"), row.names = FALSE)
+```
+
+```{r install GeneSetCluster}
+######## Check if the required packages are installed ########
+packages <- c("limma","stats","methods","RColorBrewer","clusterProfiler","GGally",
+              "network","clustree","readxl","org.Hs.eg.db",
+              "org.Mm.eg.db","cluster","factoextra","STRINGdb","WebGestaltR","stringr",
+              "AnnotationDbi","ComplexHeatmap","GO.db","GetoptLong","bigstatsr","colorRamp2",
+              "cowplot","doParallel","dplyr","foreach","ggdendro","ggnewscale","ggplot2",
+              "ggtree","ggwordcloud","grid","httr","jsonlite","parallel","patchwork","pbapply",
+              "reshape2","rgl","seriation","simplifyEnrichment","slam","tidyverse","umap",
+               "utils","grDevices")
+
+new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+
+install.packages(new.packages)
+
+# path <- "gene_set_clusters"
+# install.packages(path, repos=NULL, type='source')
+
+```
+
+```{r run GeneSetCluster}
+library(GeneSetCluster)
+GSEA.files <- paste0(path, list.files(path, pattern = ".csv"))
+
+# Load the data and create Pathway object
+# Automatically for GSEA, GREAT or IPA
+GSEA.Object1 <- LoadGeneSets(file_location = GSEA.files, 
+                              groupnames= c("GSEA_HvsAI", "GSEA_AIvs3Mo", "GSEA_3Movs6Mo", "GSEA_6MovsH"), # names of the groups
+                              P.cutoff = 0.05, # cut off the p.adjust
+                              Mol.cutoff = 15, # minimum number of genes per pathway
+                              Source = "GSEA", # the analysis (GSEA, GREAT or IPA)
+                              structure = "ENTREZID", # Gene type (SYMBOL, ENTREZID, ENSEMBLID)
+                              Organism = "org.Hs.eg.db", # database: Homo Sapiens or Mus musculus
+                              seperator = "/") # the separator used for listing genes
+
+# IMPORTANT when created manually, it is assumed that the pathways have been filtered by p-value and minimum number of genes per pathway
+# Make sure you have filtered your data
+# GSEA.Object1Manual <- ObjectCreator(Pathways = c(GSEA_HvsAI@result$ID, 
+#                                                  GSEA_Hvs6Mo@result$ID),
+#                                     Molecules = c(GSEA_HvsAI@result$core_enrichment, 
+#                                                   GSEA_Hvs6Mo@result$core_enrichment),
+#                                     Groups = c(rep("GSEA_HvsAI", times=nrow(GSEA_HvsAI@result)), 
+#                                                rep("GSEA_Hvs6Mo", times=nrow(GSEA_Hvs6Mo@result))),
+#                                     Pvalues = c(GSEA_HvsAI@result$p.adjust,  # optional
+#                                                 GSEA_Hvs6Mo@result$p.adjust),
+#                                     enrichmentScore = c(GSEA_HvsAI@result$NES, # optional
+#                                                         GSEA_Hvs6Mo@result$NES), 
+#                                     structure = "ENTREZID", Type = "", sep = "/",
+#                                     Source = "GSEA", organism = "org.Hs.eg.db")
+
+GSEA.Object2 <- CombineGeneSets(Object = GSEA.Object1,
+                                combineMethod = "Standard", threads = 4)
+## over consume resources
+
+OptimalGeneSets(Object = GSEA.Object2, 
+                uniquePathway = FALSE, # consider all the pathways (also repeated) or the unique pathways
+                method = "silhouette", max_cluster= 24, cluster_method = "kmeans", main= "Kmeans for 24 clusters")
+
+OptimalGeneSets(Object = GSEA.Object2,
+                uniquePathway = TRUE, # consider all the pathways (also repeated) or the unique pathways
+                method = "silhouette", max_cluster= 24, cluster_method = "kmeans", main= "Kmeans for 24 clusters")
+
+# in both cases the optimal cluster is 2
+
+GSEA.Object3 <- ClusterGeneSets(Object = GSEA.Object2, 
+                                clusters = 2, # consider all the pathways (also repeated) or the unique pathways
+                                method = "Hierarchical", # Hierarchical clustering or kmeans
+                                order = "cluster",
+                                molecular.signature = "All")
+
+# plot results for both all pathways and unique pathways
+plotnounique <- PlotGeneSets(GSEA.Object3, 
+                             uniquePathways = FALSE, 
+                             wordcloud = FALSE, # wordcloud only supported for GO terms
+                             doORA = T) # do ora per cluster
+
+plotunique <- PlotGeneSets(GSEA.Object3, 
+                           uniquePathways = TRUE, 
+                           wordcloud = FALSE, # wordcloud only supported for GO terms
+                           doORA = T) # do ora per cluster
+
+plotunique
+
+```
+
+```{r}
+# let's say we are interested in exploring cluster 2 in plotunique. Lets break up this cluste for further analysis 
+
+plotoptimalcluster2 <- OptimalGeneSets(Object = GSEA.Object3, 
+                uniquePathway = TRUE, # consider all the pathways (also repeated) or the unique pathways
+                cluster = 2, # which cluster
+                method = "silhouette", max_cluster= 24, cluster_method = "kmeans", main= "Kmeans for 24 clusters in cluster 1")
+
+plotoptimalcluster2 # optimal 2 break up cluster 2 in 2 clusters
+
+GSEA.Object3breakup <- BreakUpCluster(GSEA.Object3, 
+                                      breakup.cluster = 2, # which cluster
+                                      sub.cluster = 2, # in how many cluster split up
+                                      uniquePathways = TRUE) # conside unique pathways
+
+plotuniquebreakup <- PlotGeneSets(GSEA.Object3breakup, 
+                                  uniquePathways = TRUE, 
+                                  wordcloud = TRUE, # wordcloud only supported for GO terms
+                                  doORA = T) # do ora per cluster
+
+plotuniquebreakup
+```
+
+```{r breakup cluster 1}
+# Now break up the cluster 1 
+plotoptimalcluster1 <- OptimalGeneSets(Object = GSEA.Object3, 
+                uniquePathway = TRUE, # consider all the pathways (also repeated) or the unique pathways
+                cluster = 1, # which cluster
+                method = "silhouette", max_cluster= 24, cluster_method = "kmeans", main= "Kmeans for 24 clusters in cluster 1")
+
+plotoptimalcluster1 # optimal 1 break up cluster 1 in 8 clusters
+
+GSEA.Object3breakup2 <- BreakUpCluster(GSEA.Object3breakup, 
+                                      breakup.cluster = 1, # which cluster
+                                      sub.cluster = 8, # in how many cluster split up
+                                      uniquePathways = TRUE) # conside unique pathways
+
+plotuniquebreakup2 <- PlotGeneSets(GSEA.Object3breakup2, 
+                                   uniquePathways = TRUE, 
+                                   wordcloud = TRUE, # wordcloud only supported for GO terms
+                                   doORA = T) # do ora per cluster
+
+plotuniquebreakup2
+
+```
