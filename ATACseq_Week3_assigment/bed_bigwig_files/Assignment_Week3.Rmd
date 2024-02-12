@@ -1,0 +1,535 @@
+---
+title: "Week3_Assignment"
+author: "Ali Balubaid"
+date: "2024-02-12"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Week 3 Assignment
+
+In the following document, we execute the code neccessary to satisfy the tasks for week 3 assignment.
+
+The analysis tasks are the following:
+1)	Download the ATAC-seq data from the GSE79019 GEO repository. 
+a.	Focus on the samples related to your specific analysis. 
+b.	Identify the consensus peaks starting from the BED files, and 
+c.	derive the count matrix for these consensus peaks from the bigwig (.bw) files. 
+2) Identify the differentially accessible peaks across the three conditions.
+3) Group the differentially accessible peaks according to their trend across the three conditions. For example, which peaks show a consistent increase in accessibility over time? Which peaks are accessible in neutrophil at 3hrs but not in the other two cell types at the same time point?
+4) Do the FPKM RNA-seq data from the same study (GSE79044) follow the trends identified in the ATAC-seq data?
+
+```{r}
+setwd("/Volumes/AlKhazin/KAUST/BESE394A/ATACseq_pipelines/ATACseq_Week3_assigment/")
+
+```
+
+# 1.a. load counts table from GEO
+
+# GSM2083823	96h Monocyte Rep 1 ATAC-seq
+# GSM2083824	96h Monocyte Rep 2 ATAC-seq
+# GSM2083825	96h Monocyte Rep 3 ATAC-seq
+# 
+# GSM2083799	96h Neutrophil Rep 1 ATAC-seq
+# GSM2083800	96h Neutrophil Rep 2 ATAC-seq
+# GSM2083801	96h Neutrophil Rep 3 ATAC-seq
+# 
+# GSM2083775	96h Macrophage Rep 1 ATAC-seq
+# GSM2083776	96h Macrophage Rep 2 ATAC-seq
+# GSM2083777	96h Macrophage Rep 3 ATAC-seq
+
+# Script for coverting bigWig + bed files to counts
+# Partially adapted from https://lcolladotor.github.io/protocols/bigwig_DEanalysis/
+
+## 1.b. Get Peaks
+
+After downloading the ATACseq bed and bedwig data, we first define the genomic regions which we will use as features and upon which we will compute the counts from bedwig file. 
+In our case, we have 3 different cell types, each cell type has 3 biological replicates. Our intuition is to acquire the intersect of the peaks from the replicates, since we expect them to capture the same peaks. Then we concatonate (get the union) of the regions from the different cell types. This is because we would expect different peaks to be present between the conditions, and taking the intersect would lead to the loss of informative sites. We then sort and merge the peaks.
+
+These steps were done using bedtools.
+
+Additionally, we filter out the black listed regions. Then save the reference bed file to use for creating our count matrix in the next step. 
+
+```{r Get Peaks}
+##################
+#   GET PEAKS
+##################
+
+# set up
+rm(list = ls())
+library(bedtoolsr)
+library(rtracklayer)
+library(GenomicRanges)
+
+# control panel
+raw_data_folder <- 'bed_bigwig_files'
+min_overlap = 0.3
+chromosomes <- paste0('chr', c(1:22, 'X', 'Y'))
+
+## intersect replicates by condition
+INTERSECT_BED_FILE_PATHLIST_bedtools = function(bed_files){
+  dest.file = file.path(raw_data_folder,"reference.bed")
+  for(i in seq_along(bed_files)){
+    
+    if(i==1){
+      
+      ## Initiate reference bed
+      system(paste0("cp ",bed_files[i]," ",dest.file))
+      
+      ## Sanity check
+      reference.bed <- import(dest.file)
+      reference.bed <- reference.bed[seqnames(reference.bed) %in% chromosomes]
+      seqlevels(reference.bed) <- chromosomes
+      print(length(reference.bed))
+      
+    }else{
+      
+      ## Intersect bed files
+      system(paste0("bedtools intersect -a ",dest.file," -b ",bed_files[i]," > ",dest.file))
+      # print(system(paste0("wc -l ",dest.file), intern = TRUE))
+      
+      ## Sanity check
+      reference.bed <- import(dest.file)
+      reference.bed <- reference.bed[seqnames(reference.bed) %in% chromosomes]
+      seqlevels(reference.bed) <- chromosomes
+      print(length(reference.bed))
+    }
+    
+  }
+  
+
+  
+  return(reference.bed)
+}
+
+dest.file = file.path(raw_data_folder, "reference.bed")
+bed_files <- file.path(raw_data_folder, 
+                       dir(raw_data_folder, pattern = '*.bed'))
+
+cell_label = "Mac"
+reference.bed = INTERSECT_BED_FILE_PATHLIST_bedtools(grep(cell_label, bed_files, value = TRUE))
+system(paste0("mv ",dest.file," ",cell_label,"_int.bed"))
+
+cell_label = "Neu"
+reference.bed = INTERSECT_BED_FILE_PATHLIST_bedtools(grep(cell_label, bed_files, value = TRUE))
+system(paste0("mv ",dest.file," ",cell_label,"_int.bed"))
+
+cell_label = "Mon"
+reference.bed = INTERSECT_BED_FILE_PATHLIST_bedtools(grep(cell_label, bed_files, value = TRUE))
+system(paste0("mv ",dest.file," ",cell_label,"_int.bed"))
+
+# cat conditions
+int_files <- file.path(dir(".", pattern = '*_int.bed'))
+system(paste0("cat ",paste0(int_files, collapse = " ")," > reference.bed"))
+
+# sort and merge
+system("bedtools sort -i reference.bed > reference_sorted.bed")
+system("bedtools merge -i reference_sorted.bed > reference_merged.bed")
+
+# import reference bed file
+union_reference_bed = import("reference_merged.bed")
+union_reference_bed <- union_reference_bed[seqnames(union_reference_bed) %in% chromosomes]
+seqlevels(union_reference_bed) <- chromosomes
+
+# loading black listed regions
+# https://www.encodeproject.org/annotations/ENCSR636HFF/
+black_listed_bed <- import('ENCFF356LFX.bed')
+
+# any hit?
+hits <- findOverlaps(union_reference_bed, black_listed_bed)
+hits
+
+# what about the length of the overlap?
+overlaps <- pintersect(union_reference_bed[queryHits(hits)], 
+                       black_listed_bed[subjectHits(hits)])
+summary(width(overlaps)/width(union_reference_bed[queryHits(hits)]))
+
+# eliminating the blacklisted regions
+union_reference_bed <- union_reference_bed[-queryHits(hits)]
+
+# writing the reference
+export.bed(union_reference_bed, con = 'reference_merged_filtered.bed')
+```
+
+# 1.c. Get Count Matrix
+
+Next, we use the reference we built in the past step to create our count matrix by mapping the number of reads mapped to the region captured by the peak. 
+
+```{r Get Count Matrix}
+##################
+#   GET COUNT MATRIX
+##################
+
+# set up
+rm(list = ls())
+library(rtracklayer)
+library(GenomicRanges)
+
+# control panel
+raw_data_folder <- 'bed_bigwig_files'
+read_length <- 36
+chromosomes <- paste0('chr', c(1:22, 'X', 'Y'))
+reference_file <- 'reference_merged_filtered.bed'
+
+# bw files
+bw_files <- file.path(raw_data_folder, dir(raw_data_folder, pattern = '*.bw'))
+# bw_files <- bw_files[1:6]
+
+# loading reference bed
+peaks <- import(reference_file)
+
+# count matrix
+count_matrix <- matrix(0, length(peaks), length(bw_files))
+rownames(count_matrix) <- paste0(seqnames(peaks), '_', start(peaks), '_', end(peaks))
+colnames(count_matrix) <- letters[1:length(bw_files)]
+
+# looping over files
+for(i in 1:length(bw_files)){
+  
+  # current files
+  print(paste0('sample ', i, ' out of ', length(bw_files)))
+  bw_file <- bw_files[i]
+  
+  # sample name
+  sample_name <- basename(sapply(strsplit(bw_file, split = "[.]"),"[[",1))
+  sample_name <- basename(sapply(strsplit(sample_name, split = "_"),"[[",2))
+  sample_name <- paste0('T', sample_name) 
+  
+  # loadind and downsizing the bigwigfile
+  bw_file_list <- BigWigFileList(bw_file)
+  coverage <- import(bw_file_list[[1]], as = 'RleList')
+  coverage <- coverage[names(coverage) %in% chromosomes]
+  
+  # split the peaks across chromosomes
+  peaks_list <- split(peaks, seqnames(peaks))
+  
+  # coverage per peak
+  coverage <- coverage[names(peaks_list)]
+  peaks_coverage <- Views(coverage, ranges(peaks_list))
+  
+  # count values
+  counts <- sapply(peaks_coverage, sum)
+  
+  # ensuring to have the right peak information
+  chrs <- rep(names(peaks_coverage), sapply(peaks_coverage, length))
+  starts <- sapply(peaks_coverage, start)
+  ends <- sapply(peaks_coverage, end)
+  
+  # converting to vector
+  counts <- unlist(counts)
+  names(counts) <- paste0(chrs, '_', unlist(starts), '_', unlist(ends))
+  
+  # rounding up
+  counts <- round(counts / read_length)
+  
+  # count as data frame
+  count_matrix[names(counts), i] <- counts
+  colnames(count_matrix)[i] <- sample_name
+  
+}
+
+# writing
+count_matrix <- as.data.frame(count_matrix)
+count_matrix <- cbind(peak = rownames(count_matrix), count_matrix)
+head(count_matrix)
+write.csv(count_matrix, row.names = FALSE,
+          file = 'count_matrix.csv')
+```
+
+# Identify the differentially accessible peaks across the three conditions.
+
+```{r Show Heatmaps (Peaks only)}
+##################
+#   DIFFERENTIAL ACCESSIBILITY ANALYSIS
+##################
+# set directory
+setwd("/Volumes/AlKhazin/KAUST/BESE394A/ATACseq_pipelines/group5_assignment/")
+
+# set up
+rm(list = ls())
+library(DESeq2)
+library(ggplot2)
+library(ChIPseeker)
+library(rtracklayer)
+library(clusterProfiler)
+library(chipenrich)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+
+# control panel
+lfc_threshold <- 1
+sign_threshold <- 0.01
+
+# load count matrix
+count_matrix <- read.csv('count_matrix.csv')
+rownames(count_matrix) <- count_matrix$peak
+count_matrix$peak <- NULL
+head(count_matrix)
+
+meta_data_elements = strsplit(colnames(count_matrix), split = "[.]")
+cData = data.frame(celltype = sapply(meta_data_elements, "[[", 1), 
+                   group = sapply(meta_data_elements, "[[", 2),
+                   replicate =  sapply(meta_data_elements, "[[", 3),
+                   row.names = colnames(count_matrix))
+
+dge = DESeqDataSetFromMatrix(countData = count_matrix, 
+                             colData = cData, 
+                             design = ~group)
+dim(dge)
+
+## filter out low counts - we follow an scheme similar to RNAseq
+smallestGroupSize <- 3
+keep <- rowSums(counts(dge) >= 10) >= smallestGroupSize
+dge_F <- dge[keep,]
+dim(dge_F)
+
+# vsd = vst(dge)
+rld = rlog(dge)
+plotPCA(rld, intgroup = "group") + theme_bw()
+# our results show good clustering between the celltypes.
+
+# plotDispEsts(dge_F)
+
+# Differential analysis
+dge_F<- DESeq(dge_F)
+res <- results(dge_F)
+res
+
+resultsNames(dge_F)
+
+res_lfcShrink_nvc <- lfcShrink(dge_F, contrast = c("group","Mon", "Mac" ), type = "ashr")
+res_lfcShrink_uvc <- lfcShrink(dge_F, contrast = c("group","Neu", "Mac" ), type = "ashr")
+res_lfcShrink_nvu <- lfcShrink(dge_F, contrast = c("group","Mon", "Neu" ), type = "ashr")
+
+save(res_lfcShrink_nvu, res_lfcShrink_uvc, res_lfcShrink_nvu, file = "res_lfcShrink.Rda")
+
+# plotMA(res, ylim=c(-2,2), main = "Neu vs Mac LFC")
+plotMA(res_lfcShrink_nvc, ylim=c(-2,2), main = "Mon vs Mac shrkLFC")
+plotMA(res_lfcShrink_uvc, ylim=c(-2,2), main = "Neu vs Mac shrkLFC")
+plotMA(res_lfcShrink_nvu, ylim=c(-2,2), main = "Mon vs Neu shrkLFC")
+# Why to shrink: it looks at the largest fold changes that are not due 
+# to low counts and uses these to inform a prior distribution. 
+# So the large fold changes from genes with lots of statistical information are 
+# not shrunk, while the imprecise fold changes are shrunk. This allows you to 
+# compare all estimated LFC across experiments, for example, which is not really
+# feasible without the use of a prior. 
+# Michael Love https://support.bioconductor.org/p/77461/
+```
+
+
+# Group the differentially accessible peaks according to their trend across the three conditions. For example, which peaks are accessible in neutrophil at 96hrs but not in the other two cell types at the same time point?
+
+```{r Show Heatmaps (Peaks only)}
+#### Chipseeker: annotation ####
+
+# loading the reference bed file
+peaks <- import('reference_merged_filtered.bed')
+
+# creating the peak name
+peaks$name <- paste0(seqnames(peaks), '_', start(peaks), '_', end(peaks))
+
+GetSignDARs = function(res, padj_cutoff=0.01, LFC_cutoff=1){
+  # selecting the differentially expressed peaks
+  sign_idx = which((res$padj < padj_cutoff) & (abs(res$log2FoldChange) > LFC_cutoff))
+  sign_res <- res[sign_idx,]
+  return(sign_res)}
+Annotate = function(sign_res){
+  
+  # filter peaks
+  sign_peaks <- peaks[peaks$name %in% rownames(sign_res)]
+  
+  # annotating
+  peakAnno <- annotatePeak(sign_peaks, tssRegion=c(-3000, 3000),
+                           TxDb=txdb, annoDb="org.Hs.eg.db")
+  
+  order_peaks = match(peakAnno@anno$name, row.names(sign_res))
+  peakAnno_df = as.data.frame(peakAnno@anno)[order_peaks, c("transcriptId", "ENSEMBL", "SYMBOL")]
+  sign_res = cbind(sign_res, peakAnno_df)
+  sign_res = sign_res[!is.na(sign_res$ENSEMBL),]
+  
+  # If we want to shift annotations:
+  ENSEMBL_vector <- mapIds(
+    # Replace with annotation package for the organism relevant to your data
+    org.Hs.eg.db,
+    # The vector of gene identifiers we want to map
+    keys = sign_res$ENSEMBL,
+    # Replace with the type of gene identifiers in your data
+    keytype = "ENSEMBL",
+    # Replace with the type of gene identifiers you would like to map to
+    column = "ENTREZID",
+    # In the case of 1:many mappings, return the
+    # first one. This is default behavior!
+    multiVals = "first"
+  )
+  
+  # We would like a data frame we can join to the differential expression stats
+  gene_key_df <- data.frame(entrez_id = names(ENSEMBL_vector))
+  gene_key_df$ensembl_id = ENSEMBL_vector
+    # If an Ensembl gene identifier doesn't map to a gene symbol, drop that
+    # from the data frame
+  gene_key_df = gene_key_df %>% dplyr::filter(!is.na(ensembl_id))
+
+  select_g = match(gene_key_df$entrez_id, sign_res$ENSEMBL)
+  sign_res$ENTREZ_ID = sign_res$ENSEMBL
+  sign_res$ENSEMBL = gene_key_df$ensembl_id[select_g] 
+  
+  return(sign_res)
+}
+  
+res_all = rbind(res_lfcShrink_nvc, res_lfcShrink_nvu, res_lfcShrink_uvc)
+res_all = GetSignDARs(res_all)
+table(duplicated(rownames(res_all)))
+res_all = res_all[!duplicated(rownames(res_all)),]
+res_all = Annotate(res_all)
+res_all = res_all[!duplicated(res_all$ENTREZ_ID),]
+
+```
+
+```{r Annotate Peaks}
+
+# annotating
+peakAnno <- annotatePeak(peaks, tssRegion=c(-3000, 3000),
+                         TxDb=txdb, annoDb="org.Hs.eg.db")
+peakAnno
+
+# plotting
+plotAnnoBar(peakAnno)
+# plotAnnoPie(peakAnno)
+plotDistToTSS(peakAnno)
+
+# selecting the differentially expressed peaks (UvC)
+# sign_idx = which((res$padj < 0.01) & (abs(res$log2FoldChange) > 1))
+# sign_peaks <- peaks[peaks$name %in% rownames(res)[sign_idx]]
+
+sign_peaks <- peaks[peaks$name %in% rownames(res_all)]
+
+# annotation for significant peaks
+signPeakAnno <- annotatePeak(sign_peaks, tssRegion=c(-3000, 3000),
+                             TxDb=txdb, annoDb="org.Hs.eg.db")
+
+# plotting
+plotAnnoBar(signPeakAnno)
+plotDistToTSS(signPeakAnno)
+```
+Here, we look at the annotation of DAPs and how it compares to the distribution of annotations for all the other peaks. We notice that DARs tend to include more intronic and distal intergenic regions, and less near TSS promoters (<=1kb). Our current analysis is applied to all DARs. A more detailed analysis would focus on how the distributions look like for DAPs between specific conditions.
+
+For the next step, we show the normalized counts of reads aligning to peaks through a heatmap. We annotate the heatmap, revealing clusters corresponding to peak sets.
+
+```{r Show Heatmaps (Peaks only)}
+
+library(ComplexHeatmap)
+library(ggplot2)
+
+mat <- assay(rld)[rownames(res_all), ]
+mat <- mat - rowMeans(mat)
+
+f <- Heatmap(mat, cluster_rows = T,
+             cluster_columns = F,  
+             # show_row_names = FALSE,
+             name = "Z-score")
+f = draw(f)
+
+
+## Group the differentially accessible peaks 
+
+# retrieve dendogram from ComplexHeatmap
+f_row_dend = row_dend(f)
+
+# We observe 6 clusters
+k <- 3
+clusters <- cutree(as.hclust(f_row_dend), k = k)
+
+## Create the annotation object
+# Define colors for each label
+set.seed(20)
+label_colors <- circlize::rand_color(length(unique(clusters)))
+
+# Create a named vector of colors for the labels
+names(label_colors) <- unique(clusters)
+
+row_annotation <- rowAnnotation(Group=clusters, col = list(Group = label_colors))
+f <- Heatmap(mat, cluster_rows = T,
+             cluster_columns = F, 
+             right_annotation = row_annotation,
+             show_row_names = FALSE,
+             name = "Z-score")
+f
+```
+Through heirarichal clustering, we observe 3 sets of DAPs. Group 1 - notably expressed in Macrophages. Group 2 is expressed in Neutrophils and Monocytes. Groups 3 is expressed in Macrophages and Monocytes. This interestingly reflects the proximity of the cells with respect to heirarichal relationship for hematopoietic lineages.
+
+
+# Question 3 - Do the FPKM RNA-seq data from the same study (GSE79044) follow the trends identified in the ATAC-seq data?
+
+```{r Generate Counts (RNAseq)}
+library(data.table)
+
+# load RNAseq data
+rna_data_dir = "rna_data"
+
+rna_files <- file.path(rna_data_dir, 
+                       dir(rna_data_dir, pattern = '*.txt.gz'))
+
+count_list = lapply(as.list(rna_files), function(rna_file){
+  tmp = read.table(rna_file, header = TRUE)
+  tmp = matrix(data = tmp[,2], dimnames = list(tmp$gene_id))
+  tmp = as.data.frame(t(tmp))
+  return(tmp)
+})
+
+counts = rbindlist(count_list, use.names = TRUE, fill = TRUE)
+counts = t.data.frame(counts)
+
+sample_names = sapply(strsplit(basename(rna_files), split = "[.]"), "[[", 1)
+sample_names = sapply(strsplit(sample_names, split = "_"), "[[", 2)
+colnames(counts) = paste0("T",sample_names)
+dim(counts)
+```
+
+To plot the gene expression against the peaks, we choose the peaks and transcripts corresponding to eachother. This requires filtering by entrez_id which we have included to peaks dataframe during annotation. 
+```{r Match Counts and Peaks}
+counts_names = sapply(strsplit(rownames(counts), split = "[.]"), "[[", 1)
+counts_matched = counts[counts_names %in% res_all$ENTREZ_ID, ]
+res_matched = res_all[res_all$ENTREZ_ID %in% counts_names, ]
+
+```
+
+```{r Show Heatmaps}
+mat <- assay(rld)[rownames(res_matched), ]
+mat <- mat - rowMeans(mat)
+fp <- Heatmap(mat, 
+             cluster_rows = T,
+             cluster_columns = F, 
+             show_row_names = FALSE,
+             name = "Peak Reads")
+
+fp        
+
+order_g = fp@row_order
+
+counts_matched = log1p(counts_matched)
+counts_matched <- counts_matched - rowMeans(counts_matched)
+fco <- Heatmap(counts_matched[order_g,], 
+             cluster_rows = F,
+             cluster_columns = F, 
+             show_row_names = FALSE,
+             name = "Gene Expression (ordered)")
+fco
+
+fc <- Heatmap(counts_matched, 
+             cluster_rows = T,
+             cluster_columns = F, 
+             show_row_names = FALSE,
+             name = "Gene Expression")
+fc
+
+
+
+print(paste0("The correlation between peak accessibility and gene expression for our dataset is: ",mean(cor(counts_matched, mat))))
+```
+After plotting the heatmaps for the corresponding peaks and gene expression, we notice very little if any correspondence in the degree of accessibility and the level of expression. This can indicate the uniqueness of the information provided by the different modalities, and future efforts to use both modalities would productively enhance the data and not be redundant.
+
+From a biological perspective, a gene being accessible does not neccessitate its expression. This is reinforced by the low average correlation between peak and expression.
+
