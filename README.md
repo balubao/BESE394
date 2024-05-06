@@ -11,7 +11,7 @@ The repository is segmented using identifier [WEEK]_[MODALITY] - where we presen
 
 4. **W4_scRNAseq:** We contribute to Snakemake workflow by Robert et al., the full workflow is present under *dea_seurat* directory, and the results are under the *results* directory.
 
-5. **W5_Multiome:** -- should include analysis during Guillermo's instructions. -- exercise was inconclusive, and workstation failure during that week.
+5. **W5_Multiome:** - Includes individual assignment for week 5 from Guillermo's section.
 
 6. **W6_Integration:** Includes group report for integration section.
 
