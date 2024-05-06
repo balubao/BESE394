@@ -1,0 +1,3 @@
+name,data,assay,metadata,control
+Memory_Tcells,memory_tcells_seurat.rds,RNA,cytokine.condition,ALL
+Naive_Tcells,naive_tcells_seurat.rds,RNA,cytokine.condition,ALL
