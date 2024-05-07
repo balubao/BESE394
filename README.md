@@ -16,3 +16,5 @@ The repository is segmented using identifier [WEEK]_[MODALITY] - where we presen
 6. **W6_Integration:** Includes group report for integration section.
 
 7. **W7_Methylation:** Includes group report for methylation section.
+
+8. **Final Project**: Includes the report and presentation for the final project.
