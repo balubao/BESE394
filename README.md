@@ -9,7 +9,7 @@ The repository is segmented using identifier [WEEK]_[MODALITY] - where we presen
 
 3. **W3_ATACseq:** assignment for week 3 includes finding consensus peaks, cont matrix, differentially accessible peaks, heatmap and clustering, and equivalent gene expression for contrast. The report in the markdown document.
 
-4. **W4_scRNAseq:** We contribute to Snakemake workflow by Robert et al., the full workflow is present under *dea_seurat* directory, and the results are under the *results* directory.
+4. **W4_scRNAseq:** We contribute to Snakemake workflow by Robert et al., the full workflow is present under *dea_seurat* directory, and the results are under the *results* directory. The forked repository could be found through the following link: https://github.com/balubao/dea_seurat .
 
 5. **W5_Multiome:** - Includes individual assignment for week 5 from Guillermo's section.
 
