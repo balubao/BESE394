@@ -17,4 +17,5 @@ The repository is segmented using identifier [WEEK]_[MODALITY] - where we presen
 
 7. **W7_Methylation:** Includes group report for methylation section.
 
-8. **Final Project**: Includes the report and presentation for the final project.
+8. **Final Project**: Includes the report and presentation for the final project. The repository for the project could be accessed using the following link: https://github.com/anagonzalezalvarez/Bioinformatics_Pipelines/tree/main/Project
+   
