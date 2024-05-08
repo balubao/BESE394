@@ -9,7 +9,7 @@ The repository is segmented using identifier [WEEK]_[MODALITY] - where we presen
 
 3. **W3_ATACseq:** assignment for week 3 includes finding consensus peaks, cont matrix, differentially accessible peaks, heatmap and clustering, and equivalent gene expression for contrast. The report in the markdown document.
 
-4. **W4_scRNAseq:** We contribute to Snakemake workflow by Robert et al., the full workflow is present under *dea_seurat* directory, and the results are under the *results* directory. The forked repository could be found through the following link: https://github.com/balubao/dea_seurat .
+4. **W4_scRNAseq:** We contribute to the Snakemake workflow by Robert et al., the full workflow is present under the *dea_seurat* directory, and the results are under the *results* directory. The forked repository can be found through the following link: https://github.com/balubao/dea_seurat .
 
 5. **W5_Multiome:** - Includes individual assignment for week 5 from Guillermo's section.
 
@@ -17,5 +17,5 @@ The repository is segmented using identifier [WEEK]_[MODALITY] - where we presen
 
 7. **W7_Methylation:** Includes group report for methylation section.
 
-8. **Final Project**: Includes the report and presentation for the final project. The repository for the project could be accessed using the following link: https://github.com/anagonzalezalvarez/Bioinformatics_Pipelines/tree/main/Project
+8. **Final Project**: Includes the report and presentation for the final project. The repository for the project could be accessed using the following link: https://github.com/anagonzalezalvarez/Bioinformatics_Pipelines/tree/main/Project♒
    
